@@ -8,8 +8,8 @@ Compiled and analyzed a comprehensive dataset combining institutional demographi
 - `College-ROI.qmd`: The main Quarto markdown document containing the data cleaning, financial metric engineering, and regression analysis.
 - `College-ROI.pdf`: The finalized, compiled report detailing the methodologies, results, and interpretations.
 - `data/`
-  - `school_data.RData`: 
-  - `state_info.csv`: 
+  - `school_data.RData`: stores 2 CSV files containing financial and demographic details of over 1,000 U.S. four-year universities.
+  - `state_info.csv`: contains 24 variables representing state information
 
 ## Tools & Technologies
 - **Languages & Tools:** R — `tidyverse` (`dplyr` for data manipulation & `ggplot2` for scatterplot regression visualization), `knitr` for LaTeX summary tables, and Quarto for reproducible reporting
