@@ -1,0 +1,375 @@
+---
+title: "Finding the Best Schools for Your Money: A Data-Driven Analysis of College ROI"
+author: "Hannah Rozenbaum"
+format: 
+  pdf
+header-includes:
+  - \usepackage{placeins}
+---
+
+```{r}
+#| include: false
+#| label: libraries
+
+# Load necessary libraries
+library(readr)
+library(knitr)
+library(ggplot2)
+library(gridExtra)
+library(kableExtra)
+suppressMessages(library(dplyr)) 
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+
+# Introduction to the Data
+This report investigates the return on investment of 1,173 four-year U.S. universities by analyzing three datasets. Two of the datasets provide demographic and financial information of U.S. universities. The remaining dataset contains state information, including population, income, employment rate, and poverty rate. Together, these three datasets allow for an analysis of college post-grad outcomes while accounting for broader economic context.
+
+# Data Preparation 
+
+To prepare the raw data for analysis, the three datasets were merged using common identifiers to create a unified dataset containing both institutional and state-level information. Then, the variables were converted into appropriate formats for analysis. The summary statistics table below provides an overview of 8 key variables and helps assess the quality of the cleaned dataset.
+
+ 
+<!--  Read the Raw Data. -->
+
+```{r}
+#| label: read-data
+# Load the school data RData file
+load("school_data.RData")
+
+# Read state information CSV file
+state_info <- read_csv("state_info.csv")
+```
+
+<!-- Combine the data frames -->
+
+```{r}
+#| label: combine_data
+
+# Merge the two college datasets by UNITID
+college_merged <- merge(four_year_demog, four_year_finan, by = "UNITID")
+
+# Merge the combined college dataset with the state information dataset by STABBR
+combined_data <- merge(college_merged, state_info, by = "STABBR")
+
+# Verify size: 1173
+# nrow(combined_data)
+```
+
+<!-- C. Correct the errors. -->
+
+```{r}
+#| label: correct-cols
+
+# Group columns that should be converted to character data type
+cols_to_char <- c("UNITID", "REGION", "LOCALE", "SCORECARD_SECTOR", "CCBASIC", 
+"CCSIZSET")
+
+# Convert those columns to char using lapply()
+combined_data[cols_to_char] <- lapply(combined_data[cols_to_char], 
+                                      as.character)
+
+# Group columns that have dollar signs and commas that should be 
+# converted to numeric data type
+
+# Group columns that should be converted to numeric data type
+cols_to_numeric <- c(
+  "MD_EARN_WNE_1YR", "MD_EARN_WNE_5YR", "PCT25_EARN_WNE_P10", 
+  "PCT75_EARN_WNE_P10", "NPT41_PUB", "NPT42_PUB", "NPT43_PUB", 
+  "NPT44_PUB", "NPT45_PUB", "NPT41_PRIV", "NPT42_PRIV", "NPT43_PRIV",
+  "NPT44_PRIV", "NPT45_PRIV", "NPT4_PUB", "NPT4_PRIV", "COSTT4_A", 
+  "DEBT_MDN", "TUITIONFEE_IN", "TUITIONFEE_OUT", "TUITFTE", "INEXPFTE", 
+  "EARN_THR_STATE","Total_Employment_Rate_Pct", "Annual_Change_Pct_Employed",
+  "GDP_Pct_Change", "Income2023", "Income2019", "Income2015", 
+  "ResearchExpenditures_Federal_Govt_pct", "ResearchExpenditures_GDP_pct", 
+  "Poverty_Pct", "Pct_Forested", "Pct_Gun_At_Home") 
+
+# Convert those columns to numeric using lapply()
+combined_data[cols_to_numeric] <- lapply(combined_data[cols_to_numeric],
+function(x) {
+  x_char <- as.character(x)
+  
+  x_clean <- gsub("[$,%]", "", x_char)
+  
+  return(as.numeric(x_clean))
+})
+```
+
+<!-- D. Review the cleaned result with summary statistics (tabled) -->
+
+```{r}
+#| label: summary_stats 
+#| results: asis
+
+# Select variables of interest
+summary_vars <- combined_data %>%
+  select(ADM_RATE, C150_4, MD_EARN_WNE_1YR, MD_EARN_WNE_5YR, COUNT_NWNE_5YR, 
+COUNT_WNE_5YR, NPT4_PUB, NPT4_PRIV)
+
+# Compute statistics
+stats_table <- data.frame(
+  Mean = sapply(summary_vars, mean, na.rm = TRUE),
+  SD = sapply(summary_vars, sd, na.rm = TRUE),
+  Median = sapply(summary_vars, median, na.rm = TRUE),
+  Missing_Count = sapply(summary_vars, function(x) sum(is.na(x)))
+)
+
+# Create table of statistics
+kable(
+    stats_table, 
+    format = "latex", 
+    booktabs = TRUE, 
+    caption = "Summary Statistics of Cleaned Target   Variables", 
+    digits = 2
+  ) %>%
+    kable_styling(latex_options = "hold_position")
+```
+\FloatBarrier
+
+# The Payback Period
+
+**Justification:**
+I began by calculating the payback period, or how long in years it takes to earn the tuition payment for the schools in the dataset. To do this, I first computed the total investment of the 4-year degree by multiplying the annual cost of attendance (COSTT4_A) by 4. This represents the total amount a student would pay over four years without any scholarships or grants and assumes that the cost remains constant each year and that no students transfer. Next, I calculated the payback period by dividing the total payment by the median earnings one year after graduation. This calculation is valid only if the median earnings are positive; if the median earnings are zero or negative, I assigned an infinite payback period (Inf) to indicate that the initial investment would never be repaid. This calculation assumes that graduates apply their entire post-graduation earnings toward repaying their college investment, and that students would not have earned anything without college.
+
+ 
+
+```{r}
+#| label: calculate-payback 
+#| results: asis
+
+# Compute calculations and save the dataset of payback periods 
+calculated <- combined_data %>%
+  mutate(
+    # Calculate the total investment for 4 years
+    total_payment = 4 * COSTT4_A,
+    
+    # Compute payback period: total payment divided by 1-year earnings, but only if the median earnings are is positive
+    payback_period_1yr = if_else(
+      MD_EARN_WNE_1YR > 0, 
+      total_payment / MD_EARN_WNE_1YR, 
+      Inf  
+    )
+  )
+
+# Select key columns and 10 rows for cleanness
+payback_preview <- calculated %>%
+  select(INSTNM, COSTT4_A, MD_EARN_WNE_1YR, payback_period_1yr) %>%
+  head(10)
+
+# Print table of results
+kable(
+  payback_preview, 
+  format = "latex",
+  booktabs = TRUE,
+  digits = 2,
+  col.names = c(
+    "Institution Name", 
+    "Annual Cost",            
+    "1 Yr Post-Grad Median Earnings",          
+    "Payback (Yrs)"           
+  ),
+  align = "lrrr", 
+  caption = "Payback Periods for First 10 Institutions"
+) %>%
+    kable_styling(latex_options = c("hold_position", "scale_down"))
+```
+
+ 
+\FloatBarrier
+**Analysis:**
+This baseline payback period offers insight into how long it takes to pay off college tuition for different schools. However, this model is quite simplistic and does not accurately reflect real-world circumstances. In reality, college graduates have other financial obligations outside of paying off their college investment. Also, it does not account for changing earnings over time or other changes in economic status post-graduation. Thus, this calculation of payback_period_1yr provides a starting point but underestimates the actual payback period in real-world scenarios. I had assumed students earn nothing without graduating from college. In the next section, I will address this limitation.
+
+# The Wage Premium
+**Justification:**
+As noted in the previous section, the payback period calculation assumes that students would have earned nothing without graduating from college. This is a problematic oversimplification, as many high school graduates earn income without a college degree. To address this limitation, I calculated the wage premium, which measures the additional earnings that college graduates earn relative to high school graduates in their home state. The dataset includes a variable (EARN_THR_STATE) that represents the median earnings of high school graduates in the same state, which serves as a baseline for comparison. The wage premium is calculated by subtracting the home-state high school graduate median earnings baseline (EARN_THR_STATE) from the median earnings of college graduates at the 5-year mark (MD_EARN_WNE_5YR). For the 10-year wage premium calculation, the dataset lacks a 10-year median earnings statistic, so I employed a creative workaround. To substitute the 10-year median earnings statistic, I calculated a mid-percentile range average, or an estimated 10-year median earnings, by averaging the 25th and 75th percentiles of earnings at 10 years.
+
+Over a 5-year period, the schools with the largest wage premiums represent institutions where college graduates' earnings outweigh the high school baseline. Institutions with the smallest wage premiums signify that graduates fail to out-earn local high school equivalents five years into their careers.
+
+ 
+
+```{r}
+#| label: calculate-wage-premiums
+#| results: asis
+
+# Calculate the 5-year and 10-year wage premiums
+premiums <- combined_data %>%
+  mutate(
+    # Subtract the state HS baseline
+    premium_5yr = MD_EARN_WNE_5YR - EARN_THR_STATE,
+    
+    # Estimate 10-year earnings by averaging 
+    # the 25th and 75th percentiles, then subtract the state HS baseline
+    earn_10yr_est = (PCT25_EARN_WNE_P10 + PCT75_EARN_WNE_P10) / 2,
+    premium_10yr = earn_10yr_est - EARN_THR_STATE
+)
+
+# Extract the Top and Bottom schools for the 5-Year Period
+top_3_five_year <- premiums %>%
+  arrange(desc(premium_5yr)) %>%
+  select(INSTNM, STABBR, premium_5yr) %>%
+  head(3)
+
+bottom_3_five_year <- premiums %>%
+  arrange(premium_5yr) %>%
+  select(INSTNM, STABBR, premium_5yr) %>%
+  head(3)
+
+# Extract the Top and Bottom schools for the 10-Year Period
+top_3_ten_year <- premiums %>%
+  arrange(desc(premium_10yr)) %>%
+  select(INSTNM, STABBR, premium_10yr) %>%
+  head(3)
+
+bottom_3_ten_year <- premiums %>%
+  arrange(premium_10yr) %>%
+  select(INSTNM, STABBR, premium_10yr) %>%
+  head(3)
+
+# Produce 5-year table
+five_year_extremes <- rbind(top_3_five_year, bottom_3_five_year)
+kable(
+  five_year_extremes,
+  format = "latex",
+  booktabs = TRUE,
+  digits = 2,
+  col.names = c("Institution Name", "State", "5-Year Wage Premium ($)"),
+  align = "lcr",
+  caption = "Largest (Top 3) and Smallest (Bottom 3) 5-Year Wage Premiums"
+) %>%
+  kable_styling(latex_options = "hold_position") %>%
+  column_spec(1, width = "8cm") %>%
+  column_spec(2, width = "2cm") %>%
+  column_spec(3, width = "5cm")
+
+# Produce 10-year table
+ten_year_extremes <- rbind(top_3_ten_year, bottom_3_ten_year)
+kable(
+  ten_year_extremes,
+  format = "latex",
+  booktabs = TRUE,
+  digits = 2,
+  col.names = c("Institution Name", "State", "10-Year Est. Wage Premium ($)"),
+  align = "lcr",
+  caption = "Largest (Top 3) and Smallest (Bottom 3) 10-Year Estimated Wage 
+  Premiums"
+) %>%
+  kable_styling(latex_options = "hold_position") %>%
+  column_spec(1, width = "8cm") %>%
+  column_spec(2, width = "2cm") %>%
+  column_spec(3, width = "5cm")
+```
+ 
+**Analysis:**
+The wage premiums likely reflect factors beyond the college's educational quality. The highest wage premiums are experienced at Harvey Mudd College, Massachusetts Institute of Technology, California Institute of Technology, and Stanford University. These institutions tend to have strong alumni networks, representation in high-paying fields, and brand recognition. Conversely, institutions with the lowest wage premiums should not necessarily be attributed to poor educational value. Lower wage premiums could result from the regional labor market, the chosen major or career path, or other factors. Certain career pathways require advanced degrees, delaying the return on investment. Because this wage premium calculation does not control for factors such as major, regional labor market conditions, and student characteristics, these results should be interpreted as associations rather than as evidence that attending a particular institution directly causes higher or lower earnings.
+
+Comparing the 5-year results to the 10-year table (calculated as the midpoint between the 25th and 75th percentiles), the results show that the top 3 institutions' premiums widen, indicating that, as careers mature, the earnings advantage associated with these top schools increases. Interestingly, two of the three schools with negative wage premiums at year 5 (Hampshire College and Berklee College of Music) do not appear in the bottom 3 by year 10. This signifies that some schools may have a slow start but eventually catch up or even surpass the high school baseline by year 10. This highlights the importance of considering both short-term and long-term outcomes when evaluating the return on investment of a college education.
+
+
+# The Cumulative Return on Investment 
+
+**Methodology:** To calculate the 5-year Cumulative Return on Investment, the 5-year wage premium (MD_EARN_WNE_5YR - EARN_THR_STATE) was multiplied by 5 to
+obtain the total cumulative economic value over 5 years. The total cost of education equals four times the average annual cost of attendance (COSTT4_A), as calculated in previous sections.  
+
+ 
+```{r}
+#| label: calculate-college-roi
+#| results: asis
+
+# Compute the 5-Year Cumulative College ROI
+roi <- combined_data %>%
+  mutate(
+    # Cost of a 4-year degree 
+    cost_4yr = 4 * COSTT4_A,
+    
+    # 5-year wage premium per year
+    premium_5yr = MD_EARN_WNE_5YR - EARN_THR_STATE,
+    
+    # Cumulative 5-year wage premium total
+    cumulative_premium_5yr = 5 * premium_5yr,
+    
+    # Calculate College ROI percentage
+    college_roi = ((cumulative_premium_5yr - cost_4yr) / cost_4yr) * 100
+  )
+
+# Extract Top 5 Best ROI schools
+top_5_roi <- roi %>%
+  arrange(desc(college_roi)) %>%
+  select(INSTNM, STABBR, college_roi) %>%
+  head(5)
+
+# Extract Bottom 5 Worst ROI schools
+bottom_5_roi <- roi %>%
+  arrange(college_roi) %>%
+  select(INSTNM, STABBR, college_roi) %>%
+  head(5)
+
+# Generate Top 5 Table
+kable(
+  top_5_roi,
+  format = "latex",
+  digits = 2,
+  col.names = c("Institution Name", "State", "5-Year Cumulative ROI (%)"),
+  align = "lcr",
+  caption = "Top 5 Institutions with the Highest Cumulative 5-Year ROI"
+) %>%
+  kable_styling(latex_options = "hold_position") %>%
+  column_spec(1, width = "8cm") %>%
+  column_spec(2, width = "2cm") %>%
+  column_spec(3, width = "5cm")
+
+# Generate Bottom 5 Table
+kable(
+  bottom_5_roi,
+  format = "latex",
+  digits = 2,
+  col.names = c("Institution Name", "State", "5-Year Cumulative ROI (%)"),
+  align = "lcr",
+  caption = "Bottom 5 Institutions with the Lowest Cumulative 5-Year ROI"
+) %>%
+    kable_styling(latex_options = "hold_position") %>%
+  column_spec(1, width = "8cm") %>%
+  column_spec(2, width = "2cm") %>%
+  column_spec(3, width = "5cm")
+```
+ 
+**Analysis:**  It is important to note that this ROI measure is a simplified estimate, as it does not account for opportunity costs, loan interest, or the time value of money. Bearing this in mind, the results present a clear divide. Affordable public schools (CUNYs and Georgia Institute of Technology) dominate the top tier likely due to a minimized cost of attendance paired with attractive wage premiums. In contrast, the high-cost private liberal arts colleges found in the bottom tier have negative cumulative returns, indicating that early-career wage gains failed to pay off college costs.
+
+# Accounting for State Labor Market Conditions
+
+**Justification:**
+To address a possible external factor, I decided to investigate whether a state's economic environment impacts a graduate's capability to translate their degree into profit. To determine if a state's labor market significantly impacts a graduate's capacity to translate their degree into financial profit, I constructed a scatter plot to map the 5-Year Cumulative ROI against state employment rates.
+
+ 
+```{r}
+#| label: visual-analysis-scatterplot
+#| fig.width: 5.83
+#| fig.height: 3.75
+#| fig.cap: "Natural Relationship Between State Employment and College ROI"
+
+# Filter out missing values
+scatterplot_data <- roi %>%
+  filter(!is.na(college_roi) & !is.na(Total_Employment_Rate_Pct))
+
+# Generate scatter plot of roi against state employment rates
+ggplot(scatterplot_data, aes(x = Total_Employment_Rate_Pct, y = college_roi)) +
+  geom_point(alpha = 0.4, color = "darkblue", size = 1.5) +
+  geom_smooth(method = "lm", color = "red", se = TRUE, lwd = 1) +
+  labs(
+    title = "Does State Economy Naturally Impact Return On Investment?",
+    subtitle = "5-Year ROI against State Employment Rates",
+    x = "State Employment Rate (%)",
+    y = "5-Year Cumulative ROI (%)"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title = element_text(face = "bold", size = 10),
+    plot.subtitle = element_text(size = 9, color = "grey30")
+  )
+```
+ 
+**Analysis:** As shown in Figure 1, the resulting ordinary least squares regression line is flat. This provides strong evidence that a state's employment rate does not naturally influence college return on investment. The vertical clustering formed by the data demonstrates that each state exhibits a wide range of ROI measures. The key takeaway from this graph is that a college's return on investment is largely independent of the state's labor market and rather is influenced by institutional traits such as tuition costs and graduate wage premiums. Further exploration incorporating additional factors such as academic major, student characteristics, and chosen career paths, could provide a more comprehensive understanding of universities' return on investment.
